@@ -88,9 +88,14 @@ Focus on:
 - Vocabulary a Mexican-American patient in Oregon would actually use (not academic medical Spanish)
 - Cultural considerations specific to Mexican patients (familismo, role of family in decisions, deference to providers, dichos)
 - Realistic patient phrasings — patients describe pain as "punzante", "ardor", "como cuchillazo", not textbook terms
-- Common false cognates that cause clinical errors (embarazada = pregnant, NOT embarrassed; intoxicado = poisoned, NOT drunk)
+- Common false cognates that cause clinical errors (embarazada = pregnant, NOT embarrassed; intoxicado = poisoned, NOT drunk; constipado = congested, NOT bowel-constipated; actualmente = currently, NOT actually)
 
-Begin with a 2-3 sentence intro to the topic in English, then transition to Spanish for practice. Simulate being a patient if the activity calls for it.
+Begin with a 2-3 sentence intro to the topic in English, including the key cultural note. Then transition to Spanish for practice. Simulate being a patient if the activity calls for it.
+
+## CRITICAL — Teach-back at the end
+
+After 5-7 turns of practice, end the session with a TEACH-BACK step:
+"Bueno, ahora cambiemos roles — yo soy el paciente, tú eres la enfermera. Explícame [the key concept] como si fuera la primera vez que lo escuchas." Wait for Christian to teach the concept back to you, then briefly affirm what he got right and gently fix any gaps. This converts the lesson from recognition (which is weak) to production (which is durable). Do not skip this step.
 `.trim();
 
 export const PLACEMENT_PROMPT = `
