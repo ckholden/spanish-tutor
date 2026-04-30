@@ -170,7 +170,7 @@ function buildLearnerBrief(learnerModel) {
 // Anthropic streaming helper
 // ---------------------------------------------------------------------------
 
-async function streamAnthropicChat({ systemPrompt, messages, env, corsHdrs }) {
+async function streamAnthropicChat({ systemPrompt, messages, env, corsHdrs, maxTokens = 1024 }) {
   const anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -180,7 +180,7 @@ async function streamAnthropicChat({ systemPrompt, messages, env, corsHdrs }) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       stream: true,
       system: systemPrompt,
       messages,
@@ -287,6 +287,7 @@ async function handleChat(request, uid, idToken, env) {
     topic = null,
     lesson = null,
     sessionSummary = null,
+    talkMode = false,
   } = body;
 
   // Load learner model + memory digest from Firebase (best-effort; don't block on failure)
@@ -313,9 +314,14 @@ async function handleChat(request, uid, idToken, env) {
     scenario,
     topic,
     lesson,
+    talkMode,
   });
 
-  return streamAnthropicChat({ systemPrompt, messages: finalMessages, env, corsHdrs });
+  // Talk mode also benefits from a shorter max_tokens to enforce brevity
+  // (handled by the prompt rules but useful as belt-and-suspenders)
+  if (talkMode) body._maxTokens = 200;
+
+  return streamAnthropicChat({ systemPrompt, messages: finalMessages, env, corsHdrs, maxTokens: talkMode ? 200 : 1024 });
 }
 
 // ---------------------------------------------------------------------------
