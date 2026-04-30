@@ -1,4 +1,4 @@
-import { assembleSystemPrompt, ANALYSIS_PROMPT, SUMMARIZE_PROMPT, EXTRACT_VOCAB_PROMPT, MEMORY_COMPRESSION_PROMPT, PRONUNCIATION_GRADE_PROMPT, TRANSLATE_WORD_PROMPT } from './system-prompts.js';
+import { assembleSystemPrompt, ANALYSIS_PROMPT, SUMMARIZE_PROMPT, EXTRACT_VOCAB_PROMPT, MEMORY_COMPRESSION_PROMPT, PRONUNCIATION_GRADE_PROMPT, TRANSLATE_WORD_PROMPT, SUGGEST_REPLIES_PROMPT } from './system-prompts.js';
 
 // ---------------------------------------------------------------------------
 // CORS
@@ -81,6 +81,7 @@ const RATE_LIMITS = {
   '/grade-pronunciation': 100,
   '/daily-lesson': 20,
   '/translate-word': 200,
+  '/suggest-replies': 400,
 };
 
 async function checkRateLimit(uid, route, env) {
@@ -727,6 +728,50 @@ async function handleTranslateWord(request, uid, env) {
 // (Add /translate-word to the RATE_LIMITS map at top of file as well)
 
 // ---------------------------------------------------------------------------
+// Route: POST /suggest-replies (3 tappable response chips below Lupita's last)
+// ---------------------------------------------------------------------------
+
+async function handleSuggestReplies(request, uid, idToken, env) {
+  const allowed = await checkRateLimit(uid, '/suggest-replies', env);
+  if (!allowed) return json({ suggestions: [] }, 200, env, request); // fail soft — chips are optional
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400, env, request); }
+  const { messages = [] } = body;
+  if (messages.length < 1) return json({ suggestions: [] }, 200, env, request);
+
+  // Pull learner level for tailoring
+  const learnerModel = await rtdbGet(`users/${uid}/learnerModel`, idToken, env).catch(() => null);
+  const level = learnerModel?.proficiency?.overall || 'A2';
+
+  // Last 6 turns is plenty of context
+  const recent = messages.slice(-6);
+  const transcript = recent
+    .filter((m) => !m.content?.startsWith('[SCENARIO START') && !m.content?.startsWith('[MEDICAL TOPIC START') && !m.content?.startsWith('[LESSON START'))
+    .map((m) => `${m.role === 'user' ? 'Christian' : 'Lupita'}: ${m.content}`)
+    .join('\n\n');
+
+  const userContent = `LEARNER LEVEL: ${level}\n\nCONVERSATION:\n${transcript}\n\nSuggest 3 next replies for Christian.`;
+
+  let raw;
+  try {
+    raw = await callHaiku({ systemPrompt: SUGGEST_REPLIES_PROMPT, userContent, env });
+  } catch {
+    return json({ suggestions: [] }, 200, env, request); // fail soft
+  }
+
+  let result;
+  try {
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
+    result = JSON.parse(cleaned);
+  } catch {
+    return json({ suggestions: [] }, 200, env, request);
+  }
+
+  return json({ suggestions: Array.isArray(result.suggestions) ? result.suggestions.slice(0, 3) : [] }, 200, env, request);
+}
+
+// ---------------------------------------------------------------------------
 // Route: GET /health
 // ---------------------------------------------------------------------------
 
@@ -762,6 +807,7 @@ export default {
     if (path === '/compress-memory' && request.method === 'POST') return handleCompressMemory(request, uid, idToken, env);
     if (path === '/grade-pronunciation' && request.method === 'POST') return handleGradePronunciation(request, uid, idToken, env);
     if (path === '/translate-word' && request.method === 'POST') return handleTranslateWord(request, uid, env);
+    if (path === '/suggest-replies' && request.method === 'POST') return handleSuggestReplies(request, uid, idToken, env);
 
     return json({ error: 'Not found' }, 404, env, request);
   },

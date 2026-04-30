@@ -200,6 +200,29 @@ Given the existing digest plus the recent session summaries below, produce an UP
 If there's no useful information to add (e.g., empty session summaries), return the existing digest unchanged.
 `.trim();
 
+export const SUGGEST_REPLIES_PROMPT = `
+You suggest 3 short Spanish replies that a learning student could send next, based on the most recent message from their tutor (Maestra Lupita) and the prior conversation.
+
+Return ONLY valid JSON, no prose, no markdown fences:
+{
+  "suggestions": [
+    "¿Puedes repetirlo?",
+    "Sí, entiendo bien",
+    "Cuéntame más sobre eso"
+  ]
+}
+
+Rules:
+- 3 suggestions ALWAYS
+- Each suggestion: 2-8 words, natural Mexican Spanish
+- Tailor to the student's level (provided as context). Don't suggest replies above their level.
+- One should be a "stuck/help" option (e.g. "No entiendo", "¿Qué significa X?", "¿Lo puedes decir más despacio?")
+- One should be a plausible direct response to what Lupita just said
+- One should be a follow-up question that keeps the conversation going
+- If the conversation is in a roleplay scenario (taquero, patient, etc.), suggestions should fit the role
+- NO English in suggestions unless the level is true beginner (A1) and a Spanish equivalent doesn't exist
+`.trim();
+
 export const TRANSLATE_WORD_PROMPT = `
 Translate a single Spanish word in context. The student tapped this word inside a sentence.
 
