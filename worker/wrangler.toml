@@ -6,11 +6,11 @@ compatibility_date = "2025-01-01"
 FIREBASE_PROJECT_ID = "maestra-lupita"
 CLOUDFLARE_PAGES_ORIGIN = "https://holdenportal.com,https://maestra-lupita.pages.dev"
 
-# Public Firebase Web API key — safe to commit (same key in firebase-config.js)
-FIREBASE_WEB_API_KEY = "AIzaSyBZm58tQpe6SnKizDcEqM_ZHKhosq7A4HI"
-
-# Secrets — set via: wrangler secret put ANTHROPIC_API_KEY
-# wrangler secret put OPENAI_API_KEY
+# Secrets — set via: wrangler secret put <NAME>
+# - ANTHROPIC_API_KEY
+# - OPENAI_API_KEY
+# - FIREBASE_WEB_API_KEY  (technically public-safe per Firebase docs, but moved to
+#   Worker secrets to silence GitHub secret-scanning false positives)
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
