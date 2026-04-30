@@ -1,4 +1,4 @@
-import { assembleSystemPrompt } from './system-prompts.js';
+import { assembleSystemPrompt, ANALYSIS_PROMPT, SUMMARIZE_PROMPT, EXTRACT_VOCAB_PROMPT, MEMORY_COMPRESSION_PROMPT, PRONUNCIATION_GRADE_PROMPT } from './system-prompts.js';
 
 // ---------------------------------------------------------------------------
 // CORS
@@ -357,6 +357,306 @@ async function handleTranscribe(request, uid, env) {
 }
 
 // ---------------------------------------------------------------------------
+// Route: POST /analyze (post-session Haiku analysis → learner model diff)
+// ---------------------------------------------------------------------------
+
+async function handleAnalyze(request, uid, idToken, env) {
+  const allowed = await checkRateLimit(uid, '/analyze', env);
+  if (!allowed) return json({ error: 'Daily analysis limit reached' }, 429, env, request);
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400, env, request); }
+  const { messages = [] } = body;
+
+  if (messages.length < 2) return json({ ok: true, skipped: 'too short' }, 200, env, request);
+
+  // Build a transcript string for Haiku to analyze
+  const transcript = messages
+    .filter((m) => m.content && !m.content.startsWith('[SCENARIO START') && !m.content.startsWith('[MEDICAL TOPIC START'))
+    .map((m) => `${m.role === 'user' ? 'Christian' : 'Lupita'}: ${m.content}`)
+    .join('\n\n');
+
+  let raw;
+  try {
+    raw = await callHaiku({ systemPrompt: ANALYSIS_PROMPT, userContent: transcript, env });
+  } catch (err) {
+    return json({ error: `Haiku error: ${err.message}` }, 502, env, request);
+  }
+
+  // Strip any markdown code fences and parse JSON
+  let analysis;
+  try {
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
+    analysis = JSON.parse(cleaned);
+  } catch {
+    return json({ error: 'Haiku returned non-JSON', raw }, 502, env, request);
+  }
+
+  // Merge into existing learnerModel — union arrays, deduplicate
+  const existing = (await rtdbGet(`users/${uid}/learnerModel`, idToken, env)) || {};
+  const merged = mergeLearnerModel(existing, analysis);
+
+  await rtdbPatch(`users/${uid}/learnerModel`, merged, idToken, env);
+
+  // Append session summary to recentSessionSummaries (keep last 10)
+  if (analysis.sessionSummary) {
+    const recents = (await rtdbGet(`users/${uid}/learnerModel/recentSessionSummaries`, idToken, env)) || [];
+    const arr = Array.isArray(recents) ? recents : Object.values(recents);
+    arr.push({ summary: analysis.sessionSummary, at: Date.now() });
+    while (arr.length > 10) arr.shift();
+    await rtdbSet(`users/${uid}/learnerModel/recentSessionSummaries`, arr, idToken, env);
+  }
+
+  return json({ ok: true, analysis }, 200, env, request);
+}
+
+function mergeLearnerModel(existing, diff) {
+  const merged = { ...existing };
+  merged.lastAnalyzedAt = Date.now();
+
+  // Grammar weaknesses — track each with a count
+  const grammarCounts = existing.grammarWeaknessCounts || {};
+  for (const w of (diff.grammarWeaknesses || [])) {
+    grammarCounts[w] = (grammarCounts[w] || 0) + 1;
+  }
+  merged.grammarWeaknessCounts = grammarCounts;
+  // Also keep the top N as a flat list for prompt injection
+  merged.grammarWeaknesses = Object.entries(grammarCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([k]) => k);
+
+  // Vocab gaps — union, capped to most-recent 30
+  const vocabSet = new Set([...(existing.vocabGaps || []), ...(diff.vocabGaps || [])]);
+  merged.vocabGaps = [...vocabSet].slice(-30);
+
+  // Pronunciation
+  const pronExisting = existing.pronunciation || { missedPhonemes: [], missedWords: [], sessionsGraded: 0 };
+  const pronDiff = diff.pronunciation || {};
+  merged.pronunciation = {
+    missedPhonemes: [...new Set([...(pronExisting.missedPhonemes || []), ...(pronDiff.missedPhonemes || [])])].slice(-15),
+    missedWords: [...new Set([...(pronExisting.missedWords || []), ...(pronDiff.missedWords || [])])].slice(-30),
+    sessionsGraded: pronExisting.sessionsGraded || 0,
+  };
+
+  // Suggested level: only update if Haiku has suggested same level twice in a row
+  if (diff.suggestedLevel) {
+    const lastSuggested = existing._lastSuggestedLevel;
+    if (lastSuggested === diff.suggestedLevel) {
+      merged.proficiency = {
+        ...(existing.proficiency || {}),
+        overall: diff.suggestedLevel,
+        lastEstimatedAt: Date.now(),
+      };
+    }
+    merged._lastSuggestedLevel = diff.suggestedLevel;
+  }
+
+  // Engagement signal — keep last 5
+  const engagementHist = existing.engagementHistory || [];
+  if (diff.engagementSignal) {
+    engagementHist.push({ signal: diff.engagementSignal, at: Date.now() });
+    while (engagementHist.length > 5) engagementHist.shift();
+  }
+  merged.engagementHistory = engagementHist;
+
+  // Recommended next focus
+  if (diff.recommendedNextFocus?.length) {
+    merged.nextRecommendedFocus = diff.recommendedNextFocus.slice(0, 3);
+  }
+
+  // Teaching notes (what's working with this student)
+  if (diff.techniqueAssessment) {
+    const notes = existing.teachingNotes || [];
+    if (diff.techniqueAssessment.whatWorked) notes.push({ kind: 'works', note: diff.techniqueAssessment.whatWorked, at: Date.now() });
+    if (diff.techniqueAssessment.whatDidntLand) notes.push({ kind: 'avoid', note: diff.techniqueAssessment.whatDidntLand, at: Date.now() });
+    while (notes.length > 20) notes.shift();
+    merged.teachingNotes = notes;
+  }
+
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
+// Route: POST /extract-vocab (Haiku → list of new vocabulary worth flashcarding)
+// ---------------------------------------------------------------------------
+
+async function handleExtractVocab(request, uid, env) {
+  const allowed = await checkRateLimit(uid, '/extract-vocab', env);
+  if (!allowed) return json({ error: 'Daily extract limit reached' }, 429, env, request);
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400, env, request); }
+  const { messages = [] } = body;
+  if (messages.length < 2) return json({ vocab: [] }, 200, env, request);
+
+  const transcript = messages
+    .filter((m) => m.content && !m.content.startsWith('[SCENARIO START') && !m.content.startsWith('[MEDICAL TOPIC START'))
+    .map((m) => `${m.role === 'user' ? 'Christian' : 'Lupita'}: ${m.content}`)
+    .join('\n\n');
+
+  let raw;
+  try {
+    raw = await callHaiku({ systemPrompt: EXTRACT_VOCAB_PROMPT, userContent: transcript, env });
+  } catch (err) {
+    return json({ error: `Haiku error: ${err.message}` }, 502, env, request);
+  }
+
+  let vocab = [];
+  try {
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
+    vocab = JSON.parse(cleaned);
+    if (!Array.isArray(vocab)) vocab = [];
+  } catch {
+    return json({ error: 'Haiku returned non-JSON', raw }, 502, env, request);
+  }
+
+  return json({ vocab }, 200, env, request);
+}
+
+// ---------------------------------------------------------------------------
+// Route: POST /summarize (Haiku 2-3 sentence session summary for history truncation)
+// ---------------------------------------------------------------------------
+
+async function handleSummarize(request, uid, env) {
+  const allowed = await checkRateLimit(uid, '/summarize', env);
+  if (!allowed) return json({ error: 'Daily summarize limit reached' }, 429, env, request);
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400, env, request); }
+  const { turns = [] } = body;
+  if (!turns.length) return json({ summary: '' }, 200, env, request);
+
+  const transcript = turns
+    .map((m) => `${m.role === 'user' ? 'Christian' : 'Lupita'}: ${m.content}`)
+    .join('\n\n');
+
+  try {
+    const summary = await callHaiku({ systemPrompt: SUMMARIZE_PROMPT, userContent: transcript, env });
+    return json({ summary: summary.trim() }, 200, env, request);
+  } catch (err) {
+    return json({ error: `Haiku error: ${err.message}` }, 502, env, request);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Route: POST /compress-memory (every ~7 sessions, compress recent summaries
+// into the rolling cross-session digest)
+// ---------------------------------------------------------------------------
+
+async function handleCompressMemory(request, uid, idToken, env) {
+  const allowed = await checkRateLimit(uid, '/compress-memory', env);
+  if (!allowed) return json({ error: 'Memory compression rate limited' }, 429, env, request);
+
+  const existing = (await rtdbGet(`users/${uid}/memoryDigest/summary`, idToken, env)) || '';
+  const recents = (await rtdbGet(`users/${uid}/learnerModel/recentSessionSummaries`, idToken, env)) || [];
+  const arr = Array.isArray(recents) ? recents : Object.values(recents);
+  if (!arr.length) return json({ ok: true, skipped: 'no recents' }, 200, env, request);
+
+  const userContent = `EXISTING DIGEST:\n${existing || '(none yet)'}\n\nRECENT SESSION SUMMARIES (newest last):\n${arr.map((s, i) => `${i + 1}. ${s.summary || s}`).join('\n')}`;
+
+  let summary;
+  try {
+    summary = (await callHaiku({ systemPrompt: MEMORY_COMPRESSION_PROMPT, userContent, env })).trim();
+  } catch (err) {
+    return json({ error: `Haiku error: ${err.message}` }, 502, env, request);
+  }
+
+  await rtdbSet(`users/${uid}/memoryDigest`, {
+    summary,
+    updatedAt: Date.now(),
+    sessionsSummarized: arr.length,
+  }, idToken, env);
+
+  return json({ ok: true, summary }, 200, env, request);
+}
+
+// ---------------------------------------------------------------------------
+// Route: POST /grade-pronunciation (target + audio → score + feedback)
+// ---------------------------------------------------------------------------
+
+async function handleGradePronunciation(request, uid, idToken, env) {
+  const allowed = await checkRateLimit(uid, '/grade-pronunciation', env);
+  if (!allowed) return json({ error: 'Daily pronunciation limit reached' }, 429, env, request);
+
+  const ct = request.headers.get('Content-Type') || '';
+  if (!ct.startsWith('multipart/form-data')) {
+    return json({ error: 'Expected multipart/form-data with audio + target' }, 400, env, request);
+  }
+
+  let incoming;
+  try { incoming = await request.formData(); } catch { return json({ error: 'Bad multipart body' }, 400, env, request); }
+
+  const audio = incoming.get('audio');
+  const target = incoming.get('target');
+  if (!audio || typeof audio === 'string') return json({ error: 'No audio file' }, 400, env, request);
+  if (!target || typeof target !== 'string') return json({ error: 'No target phrase' }, 400, env, request);
+
+  // 1. Transcribe via Whisper
+  const out = new FormData();
+  out.append('file', audio, audio.name || 'practice.webm');
+  out.append('model', 'whisper-1');
+  out.append('language', 'es');
+  out.append('response_format', 'json');
+
+  const whisperResp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+    body: out,
+  });
+  if (!whisperResp.ok) {
+    const err = await whisperResp.text();
+    return json({ error: `Whisper error: ${err.slice(0, 200)}` }, 502, env, request);
+  }
+  const { text: heard = '' } = await whisperResp.json();
+
+  // 2. Grade via Haiku
+  let grade;
+  try {
+    const raw = await callHaiku({
+      systemPrompt: PRONUNCIATION_GRADE_PROMPT,
+      userContent: `TARGET: "${target}"\nHEARD: "${heard}"`,
+      env,
+    });
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
+    grade = JSON.parse(cleaned);
+  } catch {
+    // Fallback: Levenshtein-only score if Haiku fails
+    const dist = levenshtein(target.toLowerCase().trim(), heard.toLowerCase().trim());
+    const score = Math.max(0, Math.round(100 * (1 - dist / Math.max(target.length, 1))));
+    grade = { score, feedback: `I heard: "${heard}"`, missedPhonemes: [], missedWords: [] };
+  }
+
+  // 3. Update learner model pronunciation
+  if (grade.missedPhonemes?.length || grade.missedWords?.length) {
+    const existing = (await rtdbGet(`users/${uid}/learnerModel/pronunciation`, idToken, env)) || { missedPhonemes: [], missedWords: [], sessionsGraded: 0 };
+    const updated = {
+      missedPhonemes: [...new Set([...(existing.missedPhonemes || []), ...(grade.missedPhonemes || [])])].slice(-15),
+      missedWords: [...new Set([...(existing.missedWords || []), ...(grade.missedWords || [])])].slice(-30),
+      sessionsGraded: (existing.sessionsGraded || 0) + 1,
+      lastGradedAt: Date.now(),
+    };
+    await rtdbSet(`users/${uid}/learnerModel/pronunciation`, updated, idToken, env);
+  }
+
+  return json({ heard, ...grade }, 200, env, request);
+}
+
+function levenshtein(a, b) {
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+// ---------------------------------------------------------------------------
 // Route: GET /health
 // ---------------------------------------------------------------------------
 
@@ -386,6 +686,11 @@ export default {
 
     if (path === '/chat' && request.method === 'POST') return handleChat(request, uid, idToken, env);
     if (path === '/transcribe' && request.method === 'POST') return handleTranscribe(request, uid, env);
+    if (path === '/analyze' && request.method === 'POST') return handleAnalyze(request, uid, idToken, env);
+    if (path === '/summarize' && request.method === 'POST') return handleSummarize(request, uid, env);
+    if (path === '/extract-vocab' && request.method === 'POST') return handleExtractVocab(request, uid, env);
+    if (path === '/compress-memory' && request.method === 'POST') return handleCompressMemory(request, uid, idToken, env);
+    if (path === '/grade-pronunciation' && request.method === 'POST') return handleGradePronunciation(request, uid, idToken, env);
 
     return json({ error: 'Not found' }, 404, env, request);
   },

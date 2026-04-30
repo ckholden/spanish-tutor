@@ -129,6 +129,68 @@ Rules:
 - recommendedNextFocus: 2-3 specific things to work on next session
 `.trim();
 
+export const PRONUNCIATION_GRADE_PROMPT = `
+You are a Spanish pronunciation coach. Compare the TARGET phrase to what was actually transcribed from the student's audio. Identify specific phonemes or sounds the student missed.
+
+Return ONLY valid JSON, no prose, no markdown fences:
+{
+  "score": 87,
+  "feedback": "Good attempt! The 'rr' in 'perro' came out flat — try rolling your tongue more.",
+  "missedPhonemes": ["rr"],
+  "missedWords": []
+}
+
+Rules:
+- score: 0-100. 100 = perfect. 70-90 = close, minor issues. 50-70 = several errors. <50 = significant problems.
+- Penalize lightly for accent/Whisper homophone errors (ñ→n, ll→y), heavily for real mispronunciations.
+- feedback: ONE encouraging sentence in English with a specific tip. Mexican Spanish framing.
+- missedPhonemes: any of "rr", "r", "ñ", "ll", "j", "h", "g", "ce/ci" — only flag if reasonably confident.
+- missedWords: words the transcript got obviously wrong (different word entirely, not just accent).
+- If transcript is empty or nonsense: score 0, feedback "I didn't catch that — try again."
+`.trim();
+
+export const MEMORY_COMPRESSION_PROMPT = `
+You are maintaining a rolling 500-word memory digest about a Spanish-language student named Christian. The digest is read by Maestra Lupita (the tutor) at the start of every session and helps her remember context across sessions.
+
+Given the existing digest plus the recent session summaries below, produce an UPDATED digest that:
+- Stays under 500 words
+- Is factual, kind, and useful for teaching
+- Includes: personal facts the student has shared (job, family, life context), running topics, jokes/callbacks, current life situation, language goals
+- EXCLUDES: anything sensitive he asked to forget, medical/personal details unrelated to language learning
+- Drops stale facts when newer info contradicts them
+- Written in third person ("Christian is...", "Christian mentioned...")
+- Plain text, no headers or bullet points
+
+If there's no useful information to add (e.g., empty session summaries), return the existing digest unchanged.
+`.trim();
+
+export const EXTRACT_VOCAB_PROMPT = `
+Extract any new Spanish vocabulary that appeared in this tutoring session and would be worth flashcarding for the student. Focus on:
+- Words the student asked about
+- Words the tutor introduced explicitly (especially with parenthetical translations)
+- Words the student fumbled or used incorrectly
+- High-value Mexican slang or modismos used in conversation
+
+Return ONLY valid JSON, no prose, no markdown fences:
+[
+  {
+    "spanish": "ahorita",
+    "english": "right now / in a bit (Mexican)",
+    "partOfSpeech": "adverb",
+    "category": "slang",
+    "example": "Ahorita te llamo — I'll call you right now."
+  }
+]
+
+Rules:
+- Skip words the student already used confidently (no need to flashcard those)
+- Limit to the 10 most valuable items from this session
+- category: "slang" | "medical" | "scenario" | "general"
+- partOfSpeech: noun | verb | adjective | adverb | phrase | exclamation
+- example: a short, natural Mexican-Spanish sentence using the word
+- If nothing notable, return []
+`.trim();
+
 export const SUMMARIZE_PROMPT = `
 Condense the following Spanish tutoring conversation turns into a 2-3 sentence summary that captures: what topics were practiced, any notable errors, and the student's mood/engagement. Write in third person (e.g. "Christian practiced..."). Be specific, not vague. Return plain text only.
 `.trim();
