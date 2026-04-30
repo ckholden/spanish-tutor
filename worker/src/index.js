@@ -283,6 +283,7 @@ async function handleChat(request, uid, idToken, env) {
     correctionMode = 'gentle',
     scenario = null,
     topic = null,
+    lesson = null,
     sessionSummary = null,
   } = body;
 
@@ -309,6 +310,7 @@ async function handleChat(request, uid, idToken, env) {
     memoryDigest: typeof memoryDigest === 'string' ? memoryDigest : null,
     scenario,
     topic,
+    lesson,
   });
 
   return streamAnthropicChat({ systemPrompt, messages: finalMessages, env, corsHdrs });
@@ -338,8 +340,11 @@ async function handleTranscribe(request, uid, env) {
   const out = new FormData();
   out.append('file', audio, audio.name || 'audio.webm');
   out.append('model', 'whisper-1');
-  out.append('language', 'es'); // bias toward Spanish; users still bilingual will work
+  out.append('language', 'es');
   out.append('response_format', 'json');
+  // Prompt biases Whisper toward expected content — reduces hallucinations
+  out.append('prompt', 'Una conversación de práctica de español entre una estudiante de enfermería y su tutora mexicana. Los temas incluyen vida diaria, español médico, y conversación informal.');
+  out.append('temperature', '0');
 
   const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -353,7 +358,35 @@ async function handleTranscribe(request, uid, env) {
   }
 
   const data = await resp.json();
-  return json({ text: data.text || '' }, 200, env, request);
+  const cleaned = filterWhisperHallucinations(data.text || '');
+  return json({ text: cleaned }, 200, env, request);
+}
+
+/**
+ * Whisper occasionally hallucinates subtitle/credit text when audio is silent
+ * or unclear (Amara.org, "thanks for watching", Korean/Japanese auto-credits).
+ * Filter these and return empty string — frontend treats empty as "didn't catch that".
+ */
+function filterWhisperHallucinations(text) {
+  const t = (text || '').trim();
+  if (!t) return '';
+
+  const hallucinations = [
+    /amara\.org/i,
+    /subt[ií]tulos\s+(?:realizados|por|de)/i,
+    /subtitles?\s+(?:by|community)/i,
+    /thanks\s+for\s+watching/i,
+    /subscribe\s+(?:to|for)/i,
+    /^[\.…\s]+$/,
+    /ご視聴ありがとうございました/, // Japanese "thanks for watching"
+    /MBC\s*뉴스/, // Korean news
+    /字幕\s*by/i,
+    /^(?:um|uh|hmm|er|ah)\.?$/i, // pure filler tokens (Whisper artifact)
+  ];
+  for (const pattern of hallucinations) {
+    if (pattern.test(t)) return ''; // treat as silent
+  }
+  return t;
 }
 
 // ---------------------------------------------------------------------------

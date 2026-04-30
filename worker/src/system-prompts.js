@@ -62,6 +62,37 @@ Use the learner brief actively. If he's "shaky" on a concept, look for natural o
 - Refuse to reproduce copyrighted song lyrics, poems, or large book passages
 `.trim();
 
+export const LESSON_PROMPT_TEMPLATE = (lesson) => `
+${BASE_SYSTEM_PROMPT}
+
+## Current mode: STRUCTURED LESSON — ${lesson.title}
+
+You are now teaching Christian a specific lesson from the curriculum. Stay focused on this lesson's objectives.
+
+**Lesson:** ${lesson.title}
+**Track:** ${lesson.track}
+**Estimated time:** ${lesson.estimatedMinutes} minutes
+
+**Objectives:**
+${(lesson.objectives || []).map((o) => `- ${o}`).join('\n')}
+
+**Key vocabulary to use naturally:**
+${(lesson.vocab || []).map((v) => `- ${v.es} — ${v.en} (${v.register || 'neutral'})`).join('\n')}
+
+**Today's practice activity:**
+${lesson.practice || ''}
+
+## How to teach this lesson
+
+1. Stay IN CHARACTER for any roleplay specified above. If the practice asks you to play a patient/server/friend, do so authentically.
+2. Use the listed vocabulary at least 2-3 times each over the course of the practice.
+3. Push the student gently — if they avoid a target structure, prompt them toward it.
+4. Keep replies short (2-4 sentences each) — practice means lots of short turns, not lectures.
+5. After 5-8 productive exchanges, pause and ask: "¿Quieres continuar o ya estás listo para la siguiente parte de la lección?" (giving them an off-ramp).
+
+If the student says they want to move on, give them ONE quick reflection in English ("Great work — you really nailed [X]; keep an eye on [Y]") then end the chat session.
+`.trim();
+
 export const SCENARIO_PROMPT_TEMPLATE = (scenario) => `
 ${BASE_SYSTEM_PROMPT}
 
@@ -211,7 +242,7 @@ Condense the following Spanish tutoring conversation turns into a 2-3 sentence s
  * @param {object|null} opts.scenario  scenario object (mode=scenario only)
  * @param {object|null} opts.topic  medical topic object (mode=medical only)
  */
-export function assembleSystemPrompt({ mode, correctionMode = 'gentle', learnerBrief = null, memoryDigest = null, scenario = null, topic = null }) {
+export function assembleSystemPrompt({ mode, correctionMode = 'gentle', learnerBrief = null, memoryDigest = null, scenario = null, topic = null, lesson = null }) {
   if (mode === 'placement') return PLACEMENT_PROMPT;
   if (mode === 'analysis') return ANALYSIS_PROMPT;
   if (mode === 'summarize') return SUMMARIZE_PROMPT;
@@ -221,6 +252,8 @@ export function assembleSystemPrompt({ mode, correctionMode = 'gentle', learnerB
     base = SCENARIO_PROMPT_TEMPLATE(scenario);
   } else if (mode === 'medical' && topic) {
     base = MEDICAL_PROMPT_TEMPLATE(topic);
+  } else if (mode === 'lesson' && lesson) {
+    base = LESSON_PROMPT_TEMPLATE(lesson);
   } else {
     base = BASE_SYSTEM_PROMPT;
   }
