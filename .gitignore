@@ -1,0 +1,29 @@
+# Secrets — NEVER commit
+worker/.dev.vars
+.dev.vars
+.env
+.env.local
+*.key
+*.pem
+
+# Wrangler
+worker/.wrangler/
+worker/node_modules/
+.wrangler/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Firebase
+.firebase/
+firebase-debug.log
+
+# Logs
+*.log

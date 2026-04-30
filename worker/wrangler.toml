@@ -1,0 +1,23 @@
+name = "maestra-lupita-worker"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "maestra-lupita"
+CLOUDFLARE_PAGES_ORIGIN = "https://holdenportal.com,https://maestra-lupita.pages.dev"
+
+# Public Firebase Web API key — safe to commit (same key in firebase-config.js)
+FIREBASE_WEB_API_KEY = "AIzaSyBZm58tQpe6SnKizDcEqM_ZHKhosq7A4HI"
+
+# Secrets — set via: wrangler secret put ANTHROPIC_API_KEY
+# wrangler secret put OPENAI_API_KEY
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "2673072fd10f47549bc68a3704987f5d"
+preview_id = "fc6da9068bf84467a7610012681fba12"
+
+# Routes — uncomment once custom domain is set up
+# [[routes]]
+# pattern = "holdenportal.com/spanish/api/*"
+# zone_name = "holdenportal.com"
