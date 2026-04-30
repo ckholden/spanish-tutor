@@ -1,4 +1,4 @@
-import { assembleSystemPrompt, ANALYSIS_PROMPT, SUMMARIZE_PROMPT, EXTRACT_VOCAB_PROMPT, MEMORY_COMPRESSION_PROMPT, PRONUNCIATION_GRADE_PROMPT } from './system-prompts.js';
+import { assembleSystemPrompt, ANALYSIS_PROMPT, SUMMARIZE_PROMPT, EXTRACT_VOCAB_PROMPT, MEMORY_COMPRESSION_PROMPT, PRONUNCIATION_GRADE_PROMPT, TRANSLATE_WORD_PROMPT } from './system-prompts.js';
 
 // ---------------------------------------------------------------------------
 // CORS
@@ -80,6 +80,7 @@ const RATE_LIMITS = {
   '/compress-memory': 5,
   '/grade-pronunciation': 100,
   '/daily-lesson': 20,
+  '/translate-word': 200,
 };
 
 async function checkRateLimit(uid, route, env) {
@@ -690,6 +691,42 @@ function levenshtein(a, b) {
 }
 
 // ---------------------------------------------------------------------------
+// Route: POST /translate-word (tap-word-for-translation in chat)
+// ---------------------------------------------------------------------------
+
+async function handleTranslateWord(request, uid, env) {
+  const allowed = await checkRateLimit(uid, '/translate-word', env);
+  if (!allowed) return json({ error: 'Daily translate limit reached' }, 429, env, request);
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400, env, request); }
+  const { word = '', sentence = '' } = body;
+  if (!word.trim()) return json({ error: 'No word provided' }, 400, env, request);
+
+  const userContent = `WORD: "${word}"\nSENTENCE CONTEXT: "${sentence}"`;
+
+  let raw;
+  try {
+    raw = await callHaiku({ systemPrompt: TRANSLATE_WORD_PROMPT, userContent, env });
+  } catch (err) {
+    return json({ error: `Haiku error: ${err.message}` }, 502, env, request);
+  }
+
+  let result;
+  try {
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
+    result = JSON.parse(cleaned);
+  } catch {
+    return json({ error: 'Haiku returned non-JSON', raw }, 502, env, request);
+  }
+
+  return json(result, 200, env, request);
+}
+
+// Add rate-limit budget
+// (Add /translate-word to the RATE_LIMITS map at top of file as well)
+
+// ---------------------------------------------------------------------------
 // Route: GET /health
 // ---------------------------------------------------------------------------
 
@@ -724,6 +761,7 @@ export default {
     if (path === '/extract-vocab' && request.method === 'POST') return handleExtractVocab(request, uid, env);
     if (path === '/compress-memory' && request.method === 'POST') return handleCompressMemory(request, uid, idToken, env);
     if (path === '/grade-pronunciation' && request.method === 'POST') return handleGradePronunciation(request, uid, idToken, env);
+    if (path === '/translate-word' && request.method === 'POST') return handleTranslateWord(request, uid, env);
 
     return json({ error: 'Not found' }, 404, env, request);
   },

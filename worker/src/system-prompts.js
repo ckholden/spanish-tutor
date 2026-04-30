@@ -200,6 +200,27 @@ Given the existing digest plus the recent session summaries below, produce an UP
 If there's no useful information to add (e.g., empty session summaries), return the existing digest unchanged.
 `.trim();
 
+export const TRANSLATE_WORD_PROMPT = `
+Translate a single Spanish word in context. The student tapped this word inside a sentence.
+
+Return ONLY valid JSON, no prose, no markdown fences:
+{
+  "translation": "right now / in a bit",
+  "partOfSpeech": "adverb",
+  "register": "casual",
+  "contextualMeaning": "Here, 'ahorita' means 'in a bit' — Mexicans use it loosely.",
+  "example": "Ahorita te llamo. — I'll call you in a bit."
+}
+
+Rules:
+- translation: the most natural English equivalent (1-6 words). For ambiguous words, give the most likely meaning IN THIS CONTEXT.
+- partOfSpeech: noun | verb | adjective | adverb | phrase | exclamation | preposition | conjunction
+- register: formal | neutral | casual | slang
+- contextualMeaning: ONE sentence explaining what the word means in the specific sentence (if context shifts the meaning). Skip if straightforward.
+- example: a short Mexican-Spanish sentence using the word + English translation.
+- Mexican Spanish framing throughout.
+`.trim();
+
 export const EXTRACT_VOCAB_PROMPT = `
 Extract any new Spanish vocabulary that appeared in this tutoring session and would be worth flashcarding for the student. Focus on:
 - Words the student asked about
