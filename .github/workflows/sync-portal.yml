@@ -1,0 +1,44 @@
+name: Sync to holdenportal.com/spanish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'spanish/**'
+      - '.github/workflows/sync-portal.yml'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Push spanish/ to Holden-nerd-portal
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout portal repo
+        uses: actions/checkout@v4
+        with:
+          repository: ckholden/Holden-nerd-portal
+          token: ${{ secrets.PORTAL_PUSH_TOKEN }}
+          path: portal
+
+      - name: Sync spanish/ folder
+        run: |
+          rm -rf portal/spanish
+          cp -r source/spanish portal/spanish
+
+      - name: Commit + push if changed
+        working-directory: portal
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add spanish
+            git commit -m "Sync spanish from spanish-tutor@$(cd ../source && git rev-parse --short HEAD)"
+            git push
+          else
+            echo "No changes to sync"
+          fi
